@@ -4,7 +4,7 @@ title: Prototype pitch shift at the latency budget
 labels: [wayfinder:prototype]
 parent: 0
 status: open
-assignee:
+assignee: sean
 blocked_by: [7]
 ---
 
