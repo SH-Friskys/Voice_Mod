@@ -1,0 +1,352 @@
+<!doctype html>
+<!-- PROTOTYPE — throwaway. Answers ticket 010: does pitch shift sound OK within the latency budget? -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PROTOTYPE · Pitch shift listening test</title>
+<style>
+  body { font: 15px/1.45 system-ui, sans-serif; max-width: 980px; margin: 24px auto; padding: 0 16px; background: #f6f6f4; color: #1d1d1b; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .proto { background: #ffe9a8; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+  section { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 14px 16px; margin: 14px 0; }
+  h2 { font-size: 15px; margin: 0 0 8px; }
+  button { font: inherit; padding: 5px 12px; border-radius: 6px; border: 1px solid #aaa; background: #fafafa; cursor: pointer; }
+  button.on { background: #1d6fd8; color: #fff; border-color: #1d6fd8; }
+  button:disabled { opacity: .45; cursor: default; }
+  label { margin-right: 14px; white-space: nowrap; }
+  input[type=range] { vertical-align: middle; width: 180px; }
+  table { width: 100%; border-collapse: collapse; }
+  td, th { text-align: left; padding: 6px 6px; border-bottom: 1px solid #eee; vertical-align: middle; }
+  th { font-size: 12px; color: #666; font-weight: 600; }
+  .fit-target { color: #0a7a2f; font-weight: 600; }
+  .fit-ceiling { color: #9a6a00; font-weight: 600; }
+  .fit-over { color: #b3261e; font-weight: 600; }
+  .muted { color: #777; font-size: 13px; }
+  .warn { background: #fdecea; border-color: #f3b9b3; }
+  pre { background: #f2f2f0; padding: 8px; border-radius: 6px; font-size: 12px; overflow-x: auto; margin: 0; }
+  textarea { width: 100%; box-sizing: border-box; font: 13px ui-monospace, monospace; }
+  input.note { width: 100%; box-sizing: border-box; font: inherit; }
+</style>
+</head>
+<body>
+<h1>Pitch shift listening test <span class="proto">PROTOTYPE</span></h1>
+<p class="muted">Record your voice once, then hear it through each pitch shifter. Budget from “Set the latency budget”: pitch shift may use about <b>60 ms</b> before the 120 ms ceiling is broken; about <b>20 ms</b> would also hit the 80 ms target.</p>
+
+<section>
+  <h2>1 · Record your voice</h2>
+  <button id="startAudio">Start audio</button>
+  <button id="rec" disabled>● Record</button>
+  <label>or load a file <input type="file" id="file" accept="audio/*" disabled></label>
+  <span id="recInfo" class="muted"></span>
+  <p class="muted">Speak naturally for 10–15 seconds, the way you would in a dub or a call. Mic processing (echo cancel, auto-gain, noise suppression) is switched off so you hear the raw shifter.</p>
+</section>
+
+<section>
+  <h2>2 · Voice settings (apply to every option)</h2>
+  <p>
+    <label>Pitch <input type="range" id="semi" min="-12" max="12" step="1" value="-5"> <b id="semiV"></b> semitones</label>
+    <label>Tone / formant <input type="range" id="form" min="-12" max="12" step="1" value="0"> <b id="formV"></b></label>
+  </p>
+  <p>
+    <label><input type="checkbox" id="comp" checked> Keep voice natural (formant compensation)</label>
+    <label>Voice type <select id="base"><option value="0">auto-detect</option><option value="100">low voice</option><option value="200">high voice</option></select></label>
+  </p>
+  <p>Quick picks:
+    <button data-q="-5,0,1">Deep</button>
+    <button data-q="5,0,1">Higher</button>
+    <button data-q="-8,-4,1">Monster</button>
+    <button data-q="8,4,1">Chipmunk</button>
+    <button data-q="-4,3,1">Deep but bright</button>
+  </p>
+  <p class="muted">Tone/formant and “keep natural” only affect Signalsmith Stretch; the delay-line shifter can’t do them.</p>
+</section>
+
+<section>
+  <h2>3 · Listen and rate</h2>
+  <p>
+    <label><input type="checkbox" id="blind"> Blind mode (shuffle and hide names and delays)</label>
+    <button id="stop">■ Stop</button>
+  </p>
+  <table>
+    <thead><tr><th>Option</th><th>Pitch-shift delay</th><th></th><th>Rating</th><th>Notes</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <p class="muted">“Live” sends your mic straight through that option into your speakers. <b>Wear headphones</b>, or it will howl. Browser output adds its own delay on top, so live feels slower than the real app would.</p>
+</section>
+
+<section>
+  <h2>4 · Send me your verdict</h2>
+  <p class="muted">Copy this and paste it into the chat.</p>
+  <textarea id="summary" rows="12" readonly></textarea>
+  <button id="copy">Copy</button>
+</section>
+
+<section>
+  <h2>State</h2>
+  <pre id="state"></pre>
+</section>
+
+<script src="vendor/SignalsmithStretch.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+
+const OPTIONS = [
+  { id: 'orig',   name: 'Original (no shift)',               kind: 'orig' },
+  { id: 'st-def', name: 'Stretch, default preset',           kind: 'stretch', preset: 'default' },
+  { id: 'st-chp', name: 'Stretch, “cheaper” preset',         kind: 'stretch', preset: 'cheaper' },
+  { id: 'st-90',  name: 'Stretch, 90 ms block',              kind: 'stretch', blockMs: 90 },
+  { id: 'st-60',  name: 'Stretch, 60 ms block',              kind: 'stretch', blockMs: 60 },
+  { id: 'st-45',  name: 'Stretch, 45 ms block',              kind: 'stretch', blockMs: 45 },
+  { id: 'st-30',  name: 'Stretch, 30 ms block',              kind: 'stretch', blockMs: 30 },
+  { id: 'st-20',  name: 'Stretch, 20 ms block',              kind: 'stretch', blockMs: 20 },
+  { id: 'dl-40',  name: 'Delay-line shifter, 40 ms window',  kind: 'delay', windowMs: 40 },
+  { id: 'dl-25',  name: 'Delay-line shifter, 25 ms window',  kind: 'delay', windowMs: 25 },
+];
+
+const state = {
+  sampleRate: null, recordingSeconds: 0, recording: false,
+  playing: null, live: null, lastAction: 'page loaded',
+  latencyMs: {}, ratings: {}, notes: {},
+};
+
+let ctx, stretch, shifter, recorderNode, micStream, micSource, recordedChunks = [], recording = null, currentSrc = null;
+
+const WORKLETS = `
+class Rec extends AudioWorkletProcessor {
+  process(inputs) { const ch = inputs[0][0]; if (ch) this.port.postMessage(ch.slice(0)); return true; }
+}
+registerProcessor('rec', Rec);
+
+// Classic two-tap delay-line pitch shifter with Hann crossfade.
+class Shift extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.size = 1 << 15; this.buf = new Float32Array(this.size); this.w = 0;
+    this.phase = 0; this.ratio = 1; this.win = 0.04 * sampleRate;
+    this.port.onmessage = e => {
+      if ('ratio' in e.data) this.ratio = e.data.ratio;
+      if ('windowMs' in e.data) this.win = e.data.windowMs / 1000 * sampleRate;
+    };
+  }
+  read(d) {
+    let p = this.w - d; while (p < 0) p += this.size;
+    const i = Math.floor(p), f = p - i;
+    const a = this.buf[i % this.size], b = this.buf[(i + 1) % this.size];
+    return a + (b - a) * f;
+  }
+  process(inputs, outputs) {
+    const inp = inputs[0][0], outs = outputs[0], n = outs[0].length, W = this.win;
+    const step = (1 - this.ratio) / W;
+    for (let k = 0; k < n; k++) {
+      this.buf[this.w] = inp ? inp[k] : 0;
+      let y = 0;
+      for (const off of [0, 0.5]) {
+        let ph = this.phase + off; ph -= Math.floor(ph);
+        const g = Math.sin(Math.PI * ph);
+        y += this.read(ph * W + 1) * g * g;
+      }
+      for (const o of outs) o[k] = y;
+      this.w = (this.w + 1) % this.size;
+      this.phase += step; this.phase -= Math.floor(this.phase);
+    }
+    return true;
+  }
+}
+registerProcessor('shift', Shift);
+`;
+
+function voice() {
+  return {
+    semitones: +$('semi').value,
+    formantSemitones: +$('form').value,
+    formantCompensation: $('comp').checked,
+    formantBaseHz: +$('base').value,
+  };
+}
+
+function fitClass(ms) {
+  if (ms == null) return ['', ''];
+  if (ms <= 20) return ['fit-target', 'hits 80 ms target'];
+  if (ms <= 60) return ['fit-ceiling', 'fits 120 ms ceiling'];
+  return ['fit-over', 'over budget'];
+}
+
+let order = OPTIONS.map(o => o.id);
+function renderRows() {
+  const blind = $('blind').checked;
+  const tb = $('rows'); tb.innerHTML = '';
+  order.forEach((id, i) => {
+    const o = OPTIONS.find(x => x.id === id);
+    const lat = state.latencyMs[id];
+    const [cls, txt] = o.kind === 'orig' ? ['', '—'] : fitClass(lat);
+    const tr = document.createElement('tr');
+    const label = blind ? `Option ${String.fromCharCode(65 + i)}` : o.name;
+    const latCell = blind ? '<span class="muted">hidden</span>'
+      : o.kind === 'orig' ? '0 ms'
+      : lat == null ? '<span class="muted">play to measure</span>'
+      : `${lat.toFixed(0)} ms <span class="${cls}">· ${txt}</span>`;
+    tr.innerHTML = `
+      <td>${label}</td>
+      <td>${latCell}</td>
+      <td><button data-play="${id}" ${recording ? '' : 'disabled'} class="${state.playing === id ? 'on' : ''}">▶ Play</button>
+          <button data-live="${id}" ${ctx ? '' : 'disabled'} class="${state.live === id ? 'on' : ''}">Live</button></td>
+      <td><select data-rate="${id}">${['', 1, 2, 3, 4, 5].map(v => `<option ${state.ratings[id] == v ? 'selected' : ''}>${v}</option>`).join('')}</select></td>
+      <td><input class="note" data-note="${id}" value="${(state.notes[id] || '').replace(/"/g, '&quot;')}" placeholder="warbly? metallic? fine?"></td>`;
+    tb.appendChild(tr);
+  });
+}
+
+function renderSummary() {
+  const v = voice();
+  const lines = [
+    `Pitch-shift listening test`,
+    `Voice settings: pitch ${v.semitones > 0 ? '+' : ''}${v.semitones} st, formant ${v.formantSemitones}, natural=${v.formantCompensation}, base=${v.formantBaseHz || 'auto'}`,
+    '',
+  ];
+  for (const o of OPTIONS) {
+    const lat = o.kind === 'orig' ? 0 : state.latencyMs[o.id];
+    lines.push(`${o.name} | delay ${lat == null ? '?' : lat.toFixed(0) + ' ms'} | rating ${state.ratings[o.id] || '-'}/5 | ${state.notes[o.id] || ''}`);
+  }
+  $('summary').value = lines.join('\n');
+}
+
+function renderState() {
+  state.voice = voice();
+  $('state').textContent = JSON.stringify(state, null, 2);
+  $('semiV').textContent = (+$('semi').value > 0 ? '+' : '') + $('semi').value;
+  $('formV').textContent = (+$('form').value > 0 ? '+' : '') + $('form').value;
+}
+
+function render() { renderRows(); renderSummary(); renderState(); }
+
+async function startAudio() {
+  ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
+  const url = URL.createObjectURL(new Blob([WORKLETS], { type: 'text/javascript' }));
+  await ctx.audioWorklet.addModule(url);
+  stretch = await SignalsmithStretch(ctx);
+  stretch.connect(ctx.destination);
+  shifter = new AudioWorkletNode(ctx, 'shift', { outputChannelCount: [1] });
+  shifter.connect(ctx.destination);
+  micStream = await navigator.mediaDevices.getUserMedia({ audio: {
+    echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 } });
+  micSource = ctx.createMediaStreamSource(micStream);
+  state.sampleRate = ctx.sampleRate;
+  state.lastAction = 'audio started';
+  $('startAudio').disabled = true; $('rec').disabled = false; $('file').disabled = false;
+  render();
+}
+
+function toggleRecord() {
+  if (!state.recording) {
+    stopAll();
+    recordedChunks = [];
+    recorderNode = new AudioWorkletNode(ctx, 'rec');
+    recorderNode.port.onmessage = e => recordedChunks.push(e.data);
+    micSource.connect(recorderNode);
+    state.recording = true; state.lastAction = 'recording…';
+    $('rec').textContent = '■ Stop recording'; $('rec').classList.add('on');
+  } else {
+    micSource.disconnect(recorderNode); recorderNode.port.onmessage = null;
+    const len = recordedChunks.reduce((a, c) => a + c.length, 0);
+    recording = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = recording.getChannelData(0); let o = 0;
+    for (const c of recordedChunks) { d.set(c, o); o += c.length; }
+    state.recording = false; state.recordingSeconds = +(len / ctx.sampleRate).toFixed(1);
+    state.lastAction = 'recording captured';
+    $('rec').textContent = '● Record again'; $('rec').classList.remove('on');
+    $('recInfo').textContent = `${state.recordingSeconds} s recorded`;
+  }
+  render();
+}
+
+async function loadFile(f) {
+  const buf = await ctx.decodeAudioData(await f.arrayBuffer());
+  recording = ctx.createBuffer(1, buf.length, ctx.sampleRate);
+  recording.copyToChannel(buf.getChannelData(0), 0);
+  state.recordingSeconds = +buf.duration.toFixed(1); state.lastAction = `loaded ${f.name}`;
+  $('recInfo').textContent = `${state.recordingSeconds} s loaded`;
+  render();
+}
+
+// Route a source node through one option; returns that option's reported delay in ms.
+async function route(src, o) {
+  const v = voice();
+  if (o.kind === 'orig') { src.connect(ctx.destination); return 0; }
+  if (o.kind === 'stretch') {
+    await stretch.configure(o.preset ? { blockMs: 0, preset: o.preset } : { blockMs: o.blockMs });
+    await stretch.schedule({ active: true, ...v });
+    src.connect(stretch);
+    return (await stretch.latency()) * 1000;
+  }
+  shifter.port.postMessage({ ratio: 2 ** (v.semitones / 12), windowMs: o.windowMs });
+  src.connect(shifter);
+  return o.windowMs / 2; // taps sweep 0..window; average delay is half of it
+}
+
+function stopAll() {
+  if (currentSrc) { try { currentSrc.stop(); } catch {} currentSrc.disconnect(); currentSrc = null; }
+  if (state.live) { micSource.disconnect(); state.live = null; }
+  state.playing = null;
+}
+
+async function play(id) {
+  const was = state.playing; stopAll();
+  if (was === id) { state.lastAction = 'stopped'; return render(); }
+  const o = OPTIONS.find(x => x.id === id);
+  const src = ctx.createBufferSource(); src.buffer = recording;
+  state.latencyMs[id] = await route(src, o);
+  src.onended = () => { if (currentSrc === src) { state.playing = null; state.lastAction = 'playback ended'; render(); } };
+  src.start(); currentSrc = src; state.playing = id;
+  state.lastAction = `playing ${o.name}`;
+  render();
+}
+
+async function live(id) {
+  const was = state.live; stopAll();
+  if (was === id) { state.lastAction = 'live off'; return render(); }
+  const o = OPTIONS.find(x => x.id === id);
+  state.latencyMs[id] = await route(micSource, o);
+  state.live = id; state.lastAction = `live through ${o.name}`;
+  render();
+}
+
+// Re-apply voice settings to whatever is sounding right now.
+function applyVoice() {
+  const v = voice();
+  stretch?.schedule({ active: true, ...v });
+  shifter?.port.postMessage({ ratio: 2 ** (v.semitones / 12) });
+  state.lastAction = 'voice settings changed';
+  renderSummary(); renderState();
+}
+
+$('startAudio').onclick = () => startAudio().catch(e => { state.lastAction = 'ERROR: ' + e.message; render(); });
+$('rec').onclick = toggleRecord;
+$('file').onchange = e => e.target.files[0] && loadFile(e.target.files[0]);
+$('stop').onclick = () => { stopAll(); state.lastAction = 'stopped'; render(); };
+$('copy').onclick = () => navigator.clipboard.writeText($('summary').value);
+$('blind').onchange = () => {
+  order = OPTIONS.map(o => o.id);
+  if ($('blind').checked) for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
+  render();
+};
+for (const id of ['semi', 'form', 'comp', 'base']) $(id).oninput = applyVoice;
+document.querySelectorAll('[data-q]').forEach(b => b.onclick = () => {
+  const [s, f, c] = b.dataset.q.split(',');
+  $('semi').value = s; $('form').value = f; $('comp').checked = c === '1';
+  applyVoice();
+});
+$('rows').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.play) play(b.dataset.play);
+  if (b.dataset.live) live(b.dataset.live);
+});
+$('rows').addEventListener('change', e => {
+  if (e.target.dataset.rate) { state.ratings[e.target.dataset.rate] = e.target.value; state.lastAction = 'rated'; renderSummary(); renderState(); }
+});
+$('rows').addEventListener('input', e => {
+  if (e.target.dataset.note) { state.notes[e.target.dataset.note] = e.target.value; renderSummary(); renderState(); }
+});
+render();
+</script>
+</body>
+</html>
