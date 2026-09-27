@@ -26,6 +26,10 @@ _Avoid_: Pipeline, rack
 A user-adjustable setting on an Effect (a slider or button) whose changes take effect immediately, without restarting.
 _Avoid_: Parameter, knob
 
+**Latency**:
+The delay between speaking into the Input Mic and the transformed voice arriving at the app listening to the Virtual Microphone.
+_Avoid_: Lag, delay
+
 **Voice Converter**:
 An AI model that re-synthesizes speech to sound like a different target speaker, as opposed to a classic Effect.
 _Avoid_: AI voice, voice clone
